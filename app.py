@@ -81,7 +81,7 @@ def send_custom_emails(summary_df, contacts_df, temp_dir, smtp_settings):
             except Exception as e:
                 st.error(f"❌ Failed to send email to {to_email}: {e}")
         else:
-            st.info(f"ℹ️ No issues for plant {plant}, no email sent.")
+            st.info(f"No issues for plant {plant}, no email sent.")
 
 def run_grir_analysis_in_temp_dir(ekbe_file, ekpo_file, email_file, price_tolerance, send_emails=False, smtp_settings=None):
     """Run the GRIR analysis using a temporary directory for file operations."""
@@ -130,7 +130,7 @@ def run_grir_analysis_in_temp_dir(ekbe_file, ekpo_file, email_file, price_tolera
 
 def create_dashboard(summary_df):
     """Create interactive dashboard with charts and metrics."""
-    st.subheader("📊 Dashboard")
+    st.subheader("Dashboard")
     
     # Key metrics
     total_pos = len(summary_df['PO'].unique())
@@ -183,8 +183,31 @@ def create_dashboard(summary_df):
                 )
                 st.plotly_chart(fig_bar, use_container_width=True)
 
+def generate_email_content_preview(summary_df, contacts_df):
+    """Generate email content preview for each plant."""
+    issues_only = summary_df[summary_df['Action'].notna() & (summary_df['Action'] != "")]
+    plant_po_issues = {}
+    
+    for plant, plant_group in issues_only.groupby('Plant'):
+        report = f"<h2>GRIR Report {datetime.now().strftime('%B')} - {plant}</h2>"
+        for po, po_group in plant_group.groupby('PO'):
+            report += f"<br><b style='background-color: #FFFF00;'>PO {po}</b><br>"
+            if po_group['Action'].str.startswith("Invoice has not been paid").all():
+                report += f"<span style='color: red;'>{po_group['Action'].iloc[0]}</span><br><br>"
+            else:
+                for _, row in po_group.iterrows():
+                    report += (
+                        f"Line {int(row['Line'])} | {row['Line/Shade']} | {row['Description']}<br>"
+                        f"You goods receipted: {int(row['Goods Receipt Qty'])} @ ${row['Goods Receipt Value']:.2f}<br>"
+                        f"You were invoiced: {int(row['Invoice Qty'])} @ ${row['Invoice Receipt Value']:.2f}<br>"
+                        f"<span style='color: red;'>{row['Action']}</span></b><br><br>"
+                    )
+        plant_po_issues[plant] = report
+    
+    return plant_po_issues
+
 def main():
-    st.set_page_config(page_title="GRIR Analysis Dashboard", layout="wide", page_icon="📊")
+    st.set_page_config(page_title="GRIR Analysis Dashboard", layout="wide")
     st.title("Run GR/IR Report")
     st.markdown("1. Run GR/IR report in SAP\n2. Copy all PO numbers\n3. Paste into SE16N 'EKPO' table."\
                  "Run and export to Excel.\n4. Paste into 'EKPE' table, run and export.\n\nDo not change any exported data.\n\nemail.xlsx should contain headers 'Plant', 'Email', 'CC'")
@@ -240,7 +263,7 @@ def main():
                 
                 # Check if environment variables are set
                 if smtp_settings['password'] == 'gljy uctw cfcn cqrz':
-                    st.warning("⚠️ Using default password. Set SENDER_PASSWORD environment variable for production use.")
+                    st.warning("Using default account.")
                 else:
                     st.info("Using environment variables for email settings")
             
@@ -258,7 +281,7 @@ def main():
                 except Exception as e:
                     st.error(f"Error reading email file: {e}")
         
-        run_analysis = st.button("Run Analysis", type="primary", disabled=not all([ekbe_file, ekpo_file, email_file]))
+        run_analysis = st.button("Run", type="primary", disabled=not all([ekbe_file, ekpo_file, email_file]))
     
     # Main content area
     if run_analysis:
@@ -268,7 +291,7 @@ def main():
                     ekbe_file, ekpo_file, email_file, price_tolerance, 
                     send_emails=enable_emails, smtp_settings=smtp_settings
                 )
-                st.success("Report generation succesful!")
+                st.success("Report generation successful!")
                 
                 # Show email status if enabled
                 if enable_emails:
@@ -279,6 +302,34 @@ def main():
                 st.subheader("Analysis Results")
                 # Add filtering options here
                 st.dataframe(summary_df, use_container_width=True, hide_index=True)
+                
+                # Display email content preview
+                if email_file is not None:
+                    try:
+                        contacts_df = pd.read_excel(email_file)
+                        plant_po_issues = generate_email_content_preview(summary_df, contacts_df)
+                        
+                        st.subheader("Email Content Preview")
+                        st.markdown("Below is the content that would be sent to each plant:")
+                        
+                        for _, row in contacts_df.iterrows():
+                            plant = row.get('Plant', 'Unknown')
+                            email = row.get('Email', 'No email')
+                            cc = row.get('CC', '')
+                            cc_text = f" (CC: {cc})" if cc else ""
+                            
+                            with st.expander(f"{plant} - {email}{cc_text}"):
+                                if plant in plant_po_issues:
+                                    html_content = f"""
+                                    <div style="font-family: Arial, sans-serif; line-height: 1.6;">
+                                        {plant_po_issues[plant]}
+                                    </div>
+                                    """
+                                    st.components.v1.html(html_content, height=400, scrolling=True)
+                                else:
+                                    st.info(f"No issues found for {plant} - no email would be sent.")
+                    except Exception as e:
+                        st.error(f"Error generating email preview: {e}")
                 
                 st.subheader("Download Reports")
                 c1, c2 = st.columns(2)
@@ -291,12 +342,13 @@ def main():
                     with open(file_path, "rb") as f:
                         st.download_button(f"Download {plant_name} Report", f.read(), f"GRIR_Report_{plant_name}.xlsx")
                 
+                # Clean up temporary directory after all content is displayed
                 shutil.rmtree(temp_dir, ignore_errors=True)
             except Exception as e:
                 st.error(f"❌ An error occurred during analysis: {e}")
                 st.exception(e)
     else:
-        st.info("Upload all required files and click 'Run Analysis' to begin.")
+        st.info("Upload all required files and click 'Run' to begin.\n\nExpand the side bar on the left if it isn't visible")
 
 if __name__ == "__main__":
     main() 

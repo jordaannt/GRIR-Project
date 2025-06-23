@@ -174,11 +174,10 @@ def format_excel_file(file_path):
                 if col_header in ['Goods Receipt Value', 'Invoice Receipt Value']:
                     cell.number_format = '$#,##0.00'
                 
+                # Only make Action column text red when there's an action
                 action_value = ws.cell(row=row, column=action_col).value
-                if action_value and action_value.strip():
-                    is_paid_issue = action_value.startswith("Invoice has not been paid")
-                    if col == action_col or not is_paid_issue:
-                        cell.font = Font(color="FF0000")
+                if action_value and action_value.strip() and col == action_col:
+                    cell.font = Font(color="FF0000")
 
         if last_po is not None:
             po_groups.append({'start': current_po_start, 'end': ws.max_row})
