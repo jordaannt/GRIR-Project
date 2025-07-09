@@ -101,7 +101,7 @@ def merge_summaries(gr_summary, ir_summary, po_doc):
     
     return summary
 
-def apply_issue_logic(summary, price_tolerance=0.05):
+def apply_issue_logic(summary, price_tolerance=1.0):
     """Apply logic to identify issues."""
     summary['Action'] = ""
     for po, group in summary.groupby('PO'):
@@ -262,7 +262,7 @@ def generate_email_reports(summary, contacts_df, send_emails=False):
             else:
                 print(f"No issues for plant {plant}, no email sent.")
 
-def run_analysis(ekbe_path, po_doc_path, contacts_path, output_summary_path="GRIR_summary.xlsx", send_emails=False, price_tolerance=0.05):
+def run_analysis(ekbe_path, po_doc_path, contacts_path, output_summary_path="GRIR_summary.xlsx", send_emails=False, price_tolerance=1.0):
     """Main function to run the full GRIR analysis."""
     # Load data
     ekbe, po_doc, contacts_df = load_data(ekbe_path, po_doc_path, contacts_path)
