@@ -22,51 +22,59 @@ def load_data(ekbe_path, po_doc_path, contacts_path):
 def process_data(ekbe, po_doc):
     """Process and clean the data."""
     # Split EKBE data
-    mseg = ekbe[ekbe['Trans./event type'] == 1].copy()
-    rseg = ekbe[ekbe['Trans./event type'] == 2].copy()
+    mseg = ekbe[ekbe['Tr./ev.type'] == 1].copy()
+    rseg = ekbe[ekbe['Tr./ev.type'] == 2].copy()
 
     # Standardize key columns
-    po_doc['Purchasing Document'] = po_doc['Purchasing Document'].astype(str)
+    po_doc['Purch.Doc.'] = po_doc['Purch.Doc.'].astype(str)
     po_doc['Item'] = po_doc['Item'].astype(str).str.zfill(5)
     
-    # Exclude deleted PO lines
-    if 'Deletion indicator' in po_doc.columns:
-        deleted_po_lines = po_doc[po_doc['Deletion indicator'] == 'L'][['Purchasing Document', 'Item']].drop_duplicates()
-        po_doc = po_doc[po_doc['Deletion indicator'] != 'L']
+    # Exclude deleted PO lines - check 'D' column for 'L' values
+    if 'D' in po_doc.columns:
+        deleted_po_lines = po_doc[po_doc['D'] == 'L'][['Purch.Doc.', 'Item']].drop_duplicates()
+        po_doc = po_doc[po_doc['D'] != 'L']
     else:
         deleted_po_lines = None
     
     # Use the correct column for PO numbers - check if 'Purchasing Document' exists in EKBE
     if 'Purchasing Document' in mseg.columns:
-        mseg['PO_Number'] = mseg['Purchasing Document'].astype(str)
-        rseg['PO_Number'] = rseg['Purchasing Document'].astype(str)
+        mseg['PO_Number'] = mseg['Purchasing Document'].astype(str).str.replace(r'\.0$', '', regex=True)
+        rseg['PO_Number'] = rseg['Purchasing Document'].astype(str).str.replace(r'\.0$', '', regex=True)
     else:
         # If not, use Reference Document but we need to map it properly
-        mseg['PO_Number'] = mseg['Reference Document'].astype(str)
-        rseg['PO_Number'] = rseg['Reference Document'].astype(str)
+        mseg['PO_Number'] = mseg['Purch.Doc.'].astype(str).str.replace(r'\.0$', '', regex=True)
+        rseg['PO_Number'] = rseg['Purch.Doc.'].astype(str).str.replace(r'\.0$', '', regex=True)
     
-    mseg['Item'] = mseg['Item'].astype(str).str.zfill(5)
-    rseg['Item'] = rseg['Item'].astype(str).str.zfill(5)
+    mseg['Item'] = mseg['Item'].astype(str).str.replace(r'\.0$', '', regex=True).str.zfill(5)
+    rseg['Item'] = rseg['Item'].astype(str).str.replace(r'\.0$', '', regex=True).str.zfill(5)
+    
+    # Convert sequential Item numbers to multiples of 10 to match EKPO format
+    mseg['Item'] = mseg['Item'].astype(int).astype(str).str.zfill(5)
+    rseg['Item'] = rseg['Item'].astype(int).astype(str).str.zfill(5)
+    
     
     if deleted_po_lines is not None and not deleted_po_lines.empty:
-        mseg = mseg.merge(deleted_po_lines, left_on=['PO_Number', 'Item'], right_on=['Purchasing Document', 'Item'], how='left', indicator=True)
-        mseg = mseg[mseg['_merge'] == 'left_only'].drop(columns=['_merge', 'Purchasing Document'], errors='ignore')
-        rseg = rseg.merge(deleted_po_lines, left_on=['PO_Number', 'Item'], right_on=['Purchasing Document', 'Item'], how='left', indicator=True)
-        rseg = rseg[rseg['_merge'] == 'left_only'].drop(columns=['_merge', 'Purchasing Document'], errors='ignore')
+        mseg = mseg.merge(deleted_po_lines, left_on=['PO_Number', 'Item'], right_on=['Purch.Doc.', 'Item'], how='left', indicator=True)
+        mseg = mseg[mseg['_merge'] == 'left_only'].drop(columns=['_merge', 'Purch.Doc.'], errors='ignore')
+        rseg = rseg.merge(deleted_po_lines, left_on=['PO_Number', 'Item'], right_on=['Purch.Doc.', 'Item'], how='left', indicator=True)
+        rseg = rseg[rseg['_merge'] == 'left_only'].drop(columns=['_merge', 'Purch.Doc.'], errors='ignore')
 
     # Adjust for debit/credit
-    rseg['Signed Quantity'] = rseg.apply(lambda x: -x['Quantity'] if x['Debit/Credit ind'] == 'H' else x['Quantity'], axis=1)
-    rseg['Signed Amount'] = rseg.apply(lambda x: -x['Amount'] if x['Debit/Credit ind'] == 'H' else x['Amount'], axis=1)
-    mseg['Signed Quantity'] = mseg.apply(lambda x: -x['Quantity'] if x['Debit/Credit ind'] == 'H' else x['Quantity'], axis=1)
-    mseg['Signed Amount'] = mseg.apply(lambda x: -x['Amt.in loc.cur.'] if x['Debit/Credit ind'] == 'H' else x['Amt.in loc.cur.'], axis=1)
+    rseg['Signed Quantity'] = rseg.apply(lambda x: -x['Quantity'] if x['D/C'] == 'H' else x['Quantity'], axis=1)
+    rseg['Signed Amount'] = rseg.apply(lambda x: -x['Loc.curr.amount'] if x['D/C'] == 'H' else x['Loc.curr.amount'], axis=1)
+    mseg['Signed Quantity'] = mseg.apply(lambda x: -x['Quantity'] if x['D/C'] == 'H' else x['Quantity'], axis=1)
+    mseg['Signed Amount'] = mseg.apply(lambda x: -x['Loc.curr.amount'] if x['D/C'] == 'H' else x['Loc.curr.amount'], axis=1)
     
+
     return mseg, rseg, po_doc
 
 def summarize_data(mseg, rseg):
     """Summarize Goods Receipt (GR) and Invoice Receipt (IR) data."""
-    gr_summary = mseg.groupby(['PO_Number', 'Item', 'Material', 'Plant'], dropna=False).agg(
+    # For GR summary, also get the first goods receipt date
+    gr_summary = mseg.groupby(['PO_Number', 'Item', 'Material', 'Plnt'], dropna=False).agg(
         GR_Qty=('Signed Quantity', 'sum'),
-        GR_Value=('Signed Amount', 'sum')
+        GR_Value=('Signed Amount', 'sum'),
+        First_GR_Date=('Pstng Date', 'min')
     ).reset_index()
     
     ir_summary = rseg.groupby(['PO_Number', 'Item', 'Material'], dropna=False).agg(
@@ -80,24 +88,47 @@ def merge_summaries(gr_summary, ir_summary, po_doc):
     """Merge GR, IR, and PO data."""
     summary = pd.merge(gr_summary, ir_summary, on=['PO_Number', 'Item', 'Material'], how='outer')
     
-    # Rename PO_Number to Purchasing Document for consistency
-    summary = summary.rename(columns={'PO_Number': 'Purchasing Document'})
-    summary['Purchasing Document'] = summary['Purchasing Document'].astype(str)
+    # Rename PO_Number to Purch.Doc. for consistency with po_doc
+    summary = summary.rename(columns={'PO_Number': 'Purch.Doc.'})
+    summary['Purch.Doc.'] = summary['Purch.Doc.'].astype(str)
     summary['Item'] = summary['Item'].astype(str).str.zfill(5)
+    po_doc['Purch.Doc.'] = po_doc['Purch.Doc.'].astype(str)
+    po_doc['Item'] = po_doc['Item'].astype(str).str.zfill(5)
+
+    # Debug: Show merge overlap
+    po_keys = set(zip(po_doc['Purch.Doc.'], po_doc['Item']))
+    summary_keys = set(zip(summary['Purch.Doc.'], summary['Item']))
+    overlap = po_keys.intersection(summary_keys)
+
+
+    # Merge with suffixes to avoid column name conflicts, including vendor name
+    summary = pd.merge(summary, po_doc[['Purch.Doc.', 'Item', 'Short Text', 'Plnt', 'Name 1']], 
+                      on=['Purch.Doc.', 'Item'], how='left', suffixes=('', '_po'))
     
-    summary = pd.merge(summary, po_doc[['Purchasing Document', 'Item', 'Short Text']], on=['Purchasing Document', 'Item'], how='left')
+
+
+    # If Plnt column was duplicated, use the one from summary (original) and fill missing with po_doc values
+    if 'Plnt_po' in summary.columns:
+        summary['Plnt'] = summary['Plnt'].fillna(summary['Plnt_po'])
+        summary = summary.drop(columns=['Plnt_po'])
     
     summary = summary[[
-        'Purchasing Document', 'Item', 'Material', 'Short Text', 'Plant',
+        'Purch.Doc.', 'Item', 'Material', 'Short Text', 'Plnt', 'Name 1', 'First_GR_Date',
         'GR_Qty', 'IR_Qty', 'GR_Value', 'IR_Value'
     ]].rename(columns={
-        'Purchasing Document': 'PO', 'Item': 'Line', 'Material': 'Line/Shade', 'Short Text': 'Description',
-        'GR_Qty': 'Goods Receipt Qty', 'IR_Qty': 'Invoice Qty', 'GR_Value': 'Goods Receipt Value', 'IR_Value': 'Invoice Receipt Value'
+        'Purch.Doc.': 'PO', 'Item': 'Line', 'Material': 'Line/Shade', 'Short Text': 'Description',
+        'GR_Qty': 'Goods Receipt Qty', 'IR_Qty': 'Invoice Qty', 'GR_Value': 'Goods Receipt Value', 'IR_Value': 'Invoice Receipt Value',
+        'Plnt': 'Plant', 'Name 1': 'Vendor Name', 'First_GR_Date': 'First GR Date'
     }).sort_values(by=['PO', 'Line'])
+
+    # Ensure Description is never NaN or 'nan' string
+    summary['Description'] = summary['Description'].fillna("").replace('nan', "")
     
     summary['Line'] = summary['Line'].astype(int)
     summary[['Goods Receipt Qty', 'Invoice Qty', 'Goods Receipt Value', 'Invoice Receipt Value']] = summary[['Goods Receipt Qty', 'Invoice Qty', 'Goods Receipt Value', 'Invoice Receipt Value']].fillna(0)
     summary['Plant'] = summary['Plant'].fillna("")
+    summary['Vendor Name'] = summary['Vendor Name'].fillna("")
+    summary['First GR Date'] = summary['First GR Date'].fillna("")
     
     return summary
 
@@ -225,10 +256,7 @@ def generate_email_reports(summary, contacts_df, send_emails=False):
         SENDER_EMAIL = os.getenv('SENDER_EMAIL', 'duluxtradeops@gmail.com')
         SENDER_PASSWORD = os.getenv('SENDER_PASSWORD', 'gljy uctw cfcn cqrz')
         
-        # Check if environment variables are set
-        if SENDER_PASSWORD == 'gljy uctw cfcn cqrz':
-            print("Warning: Using default password. Set SENDER_PASSWORD environment variable for production use.")
-        
+  
         for _, row in contacts_df.iterrows():
             plant, to_email = row['Plant'], row['Email']
             cc_email = row['CC'] if pd.notna(row['CC']) else ""
